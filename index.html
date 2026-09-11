@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>ميزانيتي</title>
+  <meta name="theme-color" content="#4a9e7f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="ميزانيتي">
+  <meta name="description" content="تطبيق تتبع الميزانية الشهرية">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&family=Cairo:wght@300;400;600;700&display=swap"
+    rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="app-shell">
+
+    <header class="top-header">
+      <div class="logo">ميزاني<span>تي</span></div>
+
+      <div class="h-right">
+        <!-- الشهر — يظهر دائماً -->
+        <div class="month-badge" id="monthBadge" onclick="go('year')" title="عرض السنة">📅 مارس 2026</div>
+
+        <!-- العناصر على tablet/desktop -->
+        <div class="h-controls-desktop">
+          <span class="readonly-badge" id="readonlyBadge">🔒 عرض فقط</span>
+          <button class="readonly-toggle" id="readonlyToggle" onclick="toggleReadonly()"
+            title="وضع العرض فقط">👁</button>
+          <button class="dark-toggle" id="darkToggle" onclick="toggleDark()" title="وضع ليلي">🌙</button>
+          <select class="curr-select" id="currSelect" onchange="changeCurrency(this.value)" title="العملة">
+            <option value="MAD">🇲🇦 درهم</option>
+            <option value="DZD">🇩🇿 دينار ج</option>
+            <option value="TND">🇹🇳 دينار ت</option>
+            <option value="SAR">🇸🇦 ريال</option>
+            <option value="EGP">🇪🇬 جنيه</option>
+            <option value="EUR">🇪🇺 يورو</option>
+            <option value="USD">🇺🇸 دولار</option>
+          </select>
+        </div>
+
+        <!-- الدخل — tablet+ فقط -->
+        <div class="h-income">
+          <span class="h-income-lbl">الدخل</span>
+          <span class="h-income-amt" id="headerIncome">0 درهم</span>
+        </div>
+
+        <!-- Toggler — هاتف فقط -->
+        <button class="h-toggler" id="hToggler" onclick="toggleHeaderDrawer()" title="الإعدادات">⚙️</button>
+      </div>
+    </header>
+
+    <!-- Drawer على الهاتف -->
+    <div class="h-drawer-overlay" id="hDrawerOverlay" onclick="closeHeaderDrawer()"></div>
+    <div class="h-drawer" id="hDrawer">
+      <div class="h-drawer-row">
+        <span class="h-drawer-label">العملة</span>
+        <select class="curr-select" onchange="changeCurrency(this.value)" id="currSelectMobile">
+          <option value="MAD">🇲🇦 درهم</option>
+          <option value="DZD">🇩🇿 دينار ج</option>
+          <option value="TND">🇹🇳 دينار ت</option>
+          <option value="SAR">🇸🇦 ريال</option>
+          <option value="EGP">🇪🇬 جنيه</option>
+          <option value="EUR">🇪🇺 يورو</option>
+          <option value="USD">🇺🇸 دولار</option>
+        </select>
+      </div>
+      <div class="h-drawer-row">
+        <span class="h-drawer-label">الوضع الليلي</span>
+        <button class="dark-toggle" id="darkToggleMobile" onclick="toggleDark()">🌙</button>
+      </div>
+      <div class="h-drawer-row">
+        <span class="h-drawer-label">عرض فقط</span>
+        <button class="readonly-toggle" id="readonlyToggleMobile" onclick="toggleReadonly()">👁</button>
+      </div>
+      <div class="h-drawer-row" style="border-top:1px solid var(--border);padding-top:10px;margin-top:2px">
+        <span class="h-drawer-label">الدخل هذا الشهر</span>
+        <span class="h-income-amt" id="headerIncomeMobile" style="font-size:13px">0 درهم</span>
+      </div>
+    </div>
+    <div class="alert-bar" id="alertBar">
+      <span id="alertBarMsg"></span>
+      <button class="alert-bar-dismiss" onclick="snoozeAlert()" title="تجاهل لأسبوع">⏰</button>
+      <button class="alert-bar-dismiss" onclick="document.getElementById('alertBar').style.display='none'"
+        title="إغلاق">✕</button>
+    </div>
+    <nav class="tab-bar">
+      <div class="tab-bar-inner">
+        <div class="tab-item active" onclick="go('overview')">📊 اللوحة</div>
+        <div class="tab-item" onclick="go('year')">📅 السنة</div>
+        <div class="tab-item" onclick="go('compare')">⚖️ المقارنة</div>
+        <div class="tab-item" onclick="go('income')">💰 الدخل</div>
+        <div class="tab-item" onclick="go('bills')" data-nav-sec="bills">🧾 الفواتير</div>
+        <div class="tab-item" onclick="go('expenses')" data-nav-sec="expenses">🛍️ المصاريف</div>
+        <div class="tab-item" onclick="go('savings')" data-nav-sec="savings">💎 الادخار</div>
+        <div class="tab-item" onclick="go('debts')" data-nav-sec="debts">📋 الديون</div>
+        <div class="tab-item" onclick="go('settings')">⚙️ الإعدادات<span class="nav-badge" id="badge-tab-settings"
+            style="display:none"></span></div>
+      </div>
+    </nav>
+
+    <div class="content-wrap">
+      <aside class="sidebar">
+        <div class="sitem active" onclick="go('overview')"><span class="si">📊</span> اللوحة الرئيسية</div>
+        <div class="sitem" onclick="go('year')"><span class="si">📅</span> نظرة سنوية</div>
+        <div class="sitem" onclick="go('compare')"><span class="si">⚖️</span> مقارنة الشهور</div>
+        <div class="sitem" onclick="go('income')"><span class="si">💰</span> الدخل</div>
+        <div class="sitem" onclick="go('bills')" data-nav-sec="bills"><span class="si">🧾</span> الفواتير</div>
+        <div class="sitem" onclick="go('expenses')" data-nav-sec="expenses"><span class="si">🛍️</span> المصاريف</div>
+        <div class="sitem" onclick="go('savings')" data-nav-sec="savings"><span class="si">💎</span> الادخار</div>
+        <div class="sitem" onclick="go('debts')" data-nav-sec="debts"><span class="si">📋</span> الديون</div>
+        <div class="sitem" onclick="go('settings')"><span class="si">⚙️</span> الإعدادات<span class="nav-badge"
+            id="badge-side-settings" style="display:none"></span></div>
+      </aside>
+
+      <main class="main-content">
+
+        <!-- ══ OVERVIEW ══ -->
+        <section class="page active" id="page-overview">
+          <!-- مقارنة مع الشهر الماضي -->
+          <div class="month-cmp-banner" id="monthCmpBanner">
+            <span class="mcb-icon" id="mcbIcon">📊</span>
+            <span class="mcb-text" id="mcbText"></span>
+            <button class="mcb-close"
+              onclick="document.getElementById('monthCmpBanner').style.display='none'">✕</button>
+          </div>
+
+          <!-- ملاحظة الشهر -->
+          <div class="month-note-wrap">
+            <div class="month-note-label">📝 ملاحظة الشهر</div>
+            <textarea class="month-note-inp" id="monthNote" placeholder="اكتب ملاحظة عامة عن هذا الشهر..."
+              onchange="saveMonthNote(this.value)"></textarea>
+          </div>
+
+          <div class="copy-month-bar" id="copyBar">
+            <div class="copy-month-info">
+              <div class="copy-month-label">نسخ من الشهر السابق</div>
+              <div class="copy-month-name" id="prevMonthName">—</div>
+            </div>
+            <button class="copy-month-btn" onclick="copyFromPrevMonth()">
+              <span class="copy-icon">📋</span> نسخ الميزانية
+            </button>
+          </div>
+          <div class="summary-grid">
+            <div class="s-card c-g" data-icon="💰">
+              <div class="s-label">الدخل</div>
+              <div class="s-amount" id="ov-inc">0 درهم</div>
+              <div class="s-sub">الفعلي هذا الشهر</div>
+            </div>
+            <div class="s-card c-b" data-icon="✨">
+              <div class="s-label">شحال بقى ليك</div>
+              <div class="s-amount" id="ov-rem">0 درهم</div>
+              <div class="s-sub" id="ov-rem-p">—</div>
+            </div>
+            <div class="s-card c-p" data-icon="🛍️">
+              <div class="s-label">المصاريف الكلية</div>
+              <div class="s-amount" id="ov-spt">0 درهم</div>
+              <div class="s-sub" id="ov-spt-p">—</div>
+            </div>
+            <div class="s-card c-l" data-icon="💎">
+              <div class="s-label">الادخار</div>
+              <div class="s-amount" id="ov-sav">0 درهم</div>
+              <div class="s-sub" id="ov-sav-p">—</div>
+            </div>
+          </div>
+
+          <!-- معدل الإنفاق اليومي والتوقع -->
+          <div class="rate-card" id="rateCard" style="display:none">
+            <div class="rate-stat">
+              <div class="rate-stat-label">📅 اليوم</div>
+              <div class="rate-stat-value rate-neutral" id="rate-day"></div>
+              <div class="rate-stat-sub" id="rate-day-sub"></div>
+            </div>
+            <div class="rate-divider"></div>
+            <div class="rate-stat">
+              <div class="rate-stat-label">📊 معدل يومي</div>
+              <div class="rate-stat-value" id="rate-daily"></div>
+              <div class="rate-stat-sub">في اليوم</div>
+            </div>
+            <div class="rate-divider"></div>
+            <div class="rate-stat">
+              <div class="rate-stat-label">🔮 توقع الشهر</div>
+              <div class="rate-stat-value" id="rate-forecast"></div>
+              <div class="rate-stat-sub" id="rate-forecast-sub"></div>
+            </div>
+          </div>
+          <div class="cf-card">
+            <div class="cf-title">📥 ملخص دخول وخروج الفلوس</div>
+            <div class="cf-thead">
+              <div class="cf-thead-space"></div>
+              <div class="cf-thead-vals">
+                <div class="cf-thead-col">المخطط</div>
+                <div class="cf-thead-col">الفعلي</div>
+              </div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-sign sp">+</div>
+              <div class="cf-name">الدخل</div>
+              <div class="cf-vals-wrap">
+                <div class="cf-v" id="cf-ip">0</div>
+                <div class="cf-v act" id="cf-ia">0</div>
+              </div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-sign sm">-</div>
+              <div class="cf-name">الفواتير</div>
+              <div class="cf-vals-wrap">
+                <div class="cf-v" id="cf-bp">0</div>
+                <div class="cf-v act" id="cf-ba">0</div>
+              </div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-sign sm">-</div>
+              <div class="cf-name">المصاريف</div>
+              <div class="cf-vals-wrap">
+                <div class="cf-v" id="cf-ep">0</div>
+                <div class="cf-v act" id="cf-ea">0</div>
+              </div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-sign sm">-</div>
+              <div class="cf-name">الادخار</div>
+              <div class="cf-vals-wrap">
+                <div class="cf-v" id="cf-sp">0</div>
+                <div class="cf-v act" id="cf-sa">0</div>
+              </div>
+            </div>
+            <div class="cf-row">
+              <div class="cf-sign sm">-</div>
+              <div class="cf-name">الديون</div>
+              <div class="cf-vals-wrap">
+                <div class="cf-v" id="cf-dp">0</div>
+                <div class="cf-v act" id="cf-da">0</div>
+              </div>
+            </div>
+            <div class="cf-row solde">
+              <div class="cf-sign" style="background:var(--green-l);color:var(--green);font-size:13px">💰</div>
+              <div class="cf-name" style="color:var(--green)">الباقي ليك</div>
+              <div class="cf-vals-wrap">
+                <div class="cf-v" id="cf-rp">0</div>
+                <div class="cf-v act" id="cf-ra">0</div>
+              </div>
+            </div>
+          </div>
+          <div class="charts-row">
+            <div class="chart-card">
+              <h4>🍩 توزيع الميزانية</h4>
+              <div class="donut-wrap"><canvas id="donutChart"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h4>📊 مخطط مقابل الفعلي</h4>
+              <div class="bar-compare">
+                <div class="bar-row"><span class="blbl">الفواتير</span>
+                  <div class="btrack">
+                    <div class="bfill-p" id="bfp-bills" style="background:#e8c5b0;width:0%"></div>
+                    <div class="bfill-a" id="bfa-bills" style="background:#c9845e;width:0%"></div>
+                  </div><span class="bval" id="bv-bills">0</span>
+                </div>
+                <div class="bar-row"><span class="blbl">المصاريف</span>
+                  <div class="btrack">
+                    <div class="bfill-p" id="bfp-expenses" style="background:#f0b8b3;width:0%"></div>
+                    <div class="bfill-a" id="bfa-expenses" style="background:#c9615a;width:0%"></div>
+                  </div><span class="bval" id="bv-expenses">0</span>
+                </div>
+                <div class="bar-row"><span class="blbl">الادخار</span>
+                  <div class="btrack">
+                    <div class="bfill-p" id="bfp-savings" style="background:#a8d4c2;width:0%"></div>
+                    <div class="bfill-a" id="bfa-savings" style="background:#3a8e6f;width:0%"></div>
+                  </div><span class="bval" id="bv-savings">0</span>
+                </div>
+                <div class="bar-row"><span class="blbl">الديون</span>
+                  <div class="btrack">
+                    <div class="bfill-p" id="bfp-debts" style="background:#c8bee0;width:0%"></div>
+                    <div class="bfill-a" id="bfa-debts" style="background:#7a60a8;width:0%"></div>
+                  </div><span class="bval" id="bv-debts">0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- رسم بياني مخطط vs فعلي -->
+          <div class="overview-bar-card" id="overviewBarCard" style="display:none">
+            <h4>📊 المخطط مقابل الفعلي — مقارنة شاملة</h4>
+            <div class="overview-bar-wrap"><canvas id="overviewBarChart"></canvas></div>
+          </div>
+          <!-- مقياس صحة الميزانية -->
+          <div class="health-card" id="healthCard" style="display:none">
+            <div class="health-ring-wrap">
+              <canvas id="healthRing" width="72" height="72"></canvas>
+              <div class="health-score-num" id="healthScoreNum">—</div>
+            </div>
+            <div class="health-info">
+              <div class="health-label">🏥 صحة الميزانية</div>
+              <div class="health-status" id="healthStatus">—</div>
+              <div class="health-tip" id="healthTip">—</div>
+            </div>
+          </div>
+
+          <footer class="page-footer">ميزانيتي • البيانات محفوظة في متصفحك 🔒</footer>
+        </section>
+
+        <!-- ══ YEAR VIEW ══ -->
+        <section class="page" id="page-year">
+          <div class="year-header">
+            <button class="year-nav-btn" onclick="changeYear(-1)">›</button>
+            <div class="year-title" id="yearTitle">2026</div>
+            <button class="year-nav-btn" onclick="changeYear(1)">‹</button>
+          </div>
+          <div class="year-stats" id="yearStats"></div>
+          <div class="year-insights" id="yearInsights"></div>
+
+          <!-- مقارنة متعددة السنوات -->
+          <div class="multi-year-card">
+            <h4>📊 مقارنة السنوات</h4>
+            <div class="multi-year-controls" id="multiYearControls"></div>
+            <div class="multi-year-wrap"><canvas id="multiYearChart"></canvas></div>
+          </div>
+
+          <!-- نسبة الادخار -->
+          <div class="savings-rate-card" id="savingsRateCard" style="display:none">
+            <h4>💎 تطور نسبة الادخار من الدخل</h4>
+            <div class="savings-rate-wrap"><canvas id="savingsRateChart"></canvas></div>
+          </div>
+
+          <div class="chart-card" style="margin-bottom:16px">
+            <h4>📈 تطور السنة شهراً بشهر</h4>
+            <div style="position:relative;height:220px"><canvas id="yearLineChart"></canvas></div>
+          </div>
+          <div class="months-grid" id="monthsGrid"></div>
+          <footer class="page-footer">اضغط على أي شهر للدخول إلى تفاصيله</footer>
+        </section>
+
+        <!-- ══ INCOME ══ -->
+        <section class="page" id="page-income">
+          <div class="income-box">
+            <div class="ib-lbl">الدخل الكلي هذا الشهر</div>
+            <div class="ib-amt" id="income-big">0 درهم</div>
+          </div>
+          <div class="search-bar"><span class="search-icon">🔍</span><input type="text" placeholder="ابحث في الدخل..."
+              oninput="filterRows('income',this.value)" id="search-income"><button class="clear-btn"
+              onclick="clearSearch('income')">✕</button><button class="date-filter-btn" id="dfbtn-income"
+              onclick="toggleDateFilter('income')" title="فلتر بالتاريخ">📅</button></div>
+          <div class="date-filter-bar" id="date-filter-income" style="display:none">
+            <label>📅 من</label><input type="date" class="date-filter-inp" id="dfrom-income"
+              onchange="applyDateFilter('income')">
+            <label>إلى</label><input type="date" class="date-filter-inp" id="dto-income"
+              onchange="applyDateFilter('income')">
+            <span class="date-filter-count" id="dcount-income"></span>
+            <button class="date-filter-clear" onclick="clearDateFilter('income')">مسح</button>
+          </div>
+          <div id="card-income"></div>
+        </section>
+
+        <!-- ══ BILLS ══ -->
+        <section class="page" id="page-bills">
+          <div class="sec-title">
+            <div class="sdot" style="background:#c9845e"></div><span id="sec-title-bills">تتبع الفواتير الشهرية</span>
+          </div>
+          <div class="search-bar"><span class="search-icon">🔍</span><input type="text"
+              placeholder="ابحث في الفواتير..." oninput="filterRows('bills',this.value)" id="search-bills"><button
+              class="clear-btn" onclick="clearSearch('bills')">✕</button><button class="date-filter-btn"
+              id="dfbtn-bills" onclick="toggleDateFilter('bills')" title="فلتر بالتاريخ">📅</button></div>
+          <div class="date-filter-bar" id="date-filter-bills" style="display:none">
+            <label>📅 من</label><input type="date" class="date-filter-inp" id="dfrom-bills"
+              onchange="applyDateFilter('bills')">
+            <label>إلى</label><input type="date" class="date-filter-inp" id="dto-bills"
+              onchange="applyDateFilter('bills')">
+            <span class="date-filter-count" id="dcount-bills"></span>
+            <button class="date-filter-clear" onclick="clearDateFilter('bills')">مسح</button>
+          </div>
+          <div id="card-bills"></div>
+        </section>
+
+        <!-- ══ EXPENSES ══ -->
+        <section class="page" id="page-expenses">
+          <div class="sec-title">
+            <div class="sdot" style="background:#c9615a"></div><span id="sec-title-expenses">ملخص المصاريف</span>
+          </div>
+          <div class="search-bar"><span class="search-icon">🔍</span><input type="text"
+              placeholder="ابحث في المصاريف..." oninput="filterRows('expenses',this.value)" id="search-expenses"><button
+              class="clear-btn" onclick="clearSearch('expenses')">✕</button><button class="date-filter-btn"
+              id="dfbtn-expenses" onclick="toggleDateFilter('expenses')" title="فلتر بالتاريخ">📅</button></div>
+          <div class="date-filter-bar" id="date-filter-expenses" style="display:none">
+            <label>📅 من</label><input type="date" class="date-filter-inp" id="dfrom-expenses"
+              onchange="applyDateFilter('expenses')">
+            <label>إلى</label><input type="date" class="date-filter-inp" id="dto-expenses"
+              onchange="applyDateFilter('expenses')">
+            <span class="date-filter-count" id="dcount-expenses"></span>
+            <button class="date-filter-clear" onclick="clearDateFilter('expenses')">مسح</button>
+          </div>
+          <div id="card-expenses"></div>
+        </section>
+
+        <!-- ══ SAVINGS ══ -->
+        <section class="page" id="page-savings">
+          <div class="sec-title">
+            <div class="sdot" style="background:#3a8e6f"></div><span id="sec-title-savings">تتبع الادخار</span>
+          </div>
+          <div class="saving-alerts-wrap" id="savingsAlerts"></div>
+          <div class="savings-chart-card" id="savingsChartCard" style="display:none">
+            <h4>📈 تطور أهداف الادخار عبر السنة</h4>
+            <div class="savings-chart-wrap"><canvas id="savingsLineChart"></canvas></div>
+          </div>
+          <div class="search-bar"><span class="search-icon">🔍</span><input type="text" placeholder="ابحث في الادخار..."
+              oninput="filterRows('savings',this.value)" id="search-savings"><button class="clear-btn"
+              onclick="clearSearch('savings')">✕</button><button class="date-filter-btn" id="dfbtn-savings"
+              onclick="toggleDateFilter('savings')" title="فلتر بالتاريخ">📅</button></div>
+          <div class="date-filter-bar" id="date-filter-savings" style="display:none">
+            <label>📅 من</label><input type="date" class="date-filter-inp" id="dfrom-savings"
+              onchange="applyDateFilter('savings')">
+            <label>إلى</label><input type="date" class="date-filter-inp" id="dto-savings"
+              onchange="applyDateFilter('savings')">
+            <span class="date-filter-count" id="dcount-savings"></span>
+            <button class="date-filter-clear" onclick="clearDateFilter('savings')">مسح</button>
+          </div>
+          <div id="card-savings"></div>
+        </section>
+
+        <!-- ══ DEBTS ══ -->
+        <section class="page" id="page-debts">
+          <div class="sec-title">
+            <div class="sdot" style="background:#7a60a8"></div><span id="sec-title-debts">تتبع الديون والالتزامات</span>
+          </div>
+          <div class="debt-summary" id="debtSummary" style="display:none">
+            <div class="debt-summary-title">⏱️ توقع انتهاء الديون</div>
+            <div id="debtCounterRows"></div>
+          </div>
+          <div class="search-bar"><span class="search-icon">🔍</span><input type="text" placeholder="ابحث في الديون..."
+              oninput="filterRows('debts',this.value)" id="search-debts"><button class="clear-btn"
+              onclick="clearSearch('debts')">✕</button><button class="date-filter-btn" id="dfbtn-debts"
+              onclick="toggleDateFilter('debts')" title="فلتر بالتاريخ">📅</button></div>
+          <div class="date-filter-bar" id="date-filter-debts" style="display:none">
+            <label>📅 من</label><input type="date" class="date-filter-inp" id="dfrom-debts"
+              onchange="applyDateFilter('debts')">
+            <label>إلى</label><input type="date" class="date-filter-inp" id="dto-debts"
+              onchange="applyDateFilter('debts')">
+            <span class="date-filter-count" id="dcount-debts"></span>
+            <button class="date-filter-clear" onclick="clearDateFilter('debts')">مسح</button>
+          </div>
+          <div id="card-debts"></div>
+        </section>
+
+        <!-- ══ COMPARE ══ -->
+        <section class="page" id="page-compare">
+          <div class="compare-controls">
+            <span class="compare-controls-label">مقارنة:</span>
+            <select class="compare-month-select" id="cmp-m1" onchange="renderCompare()"></select>
+            <span style="color:var(--muted);font-weight:700">vs</span>
+            <select class="compare-month-select" id="cmp-m2" onchange="renderCompare()"></select>
+            <select class="compare-month-select" id="cmp-m3" onchange="renderCompare()">
+              <option value="">— شهر ثالث (اختياري)</option>
+            </select>
+          </div>
+          <div id="compareTableWrap"></div>
+          <footer class="page-footer">المقارنة تعرض المبالغ الفعلية فقط</footer>
+        </section>
+
+        <!-- ══ SETTINGS ══ -->
+        <section class="page" id="page-settings">
+
+          <div class="settings-section">
+            <div class="settings-section-title">💾 النسخ الاحتياطي</div>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">تصدير JSON</div>
+                  <div class="settings-row-sub">نسخة كاملة لجميع الشهور</div>
+                </div>
+                <button class="settings-btn primary" onclick="exportJSON()">⬇️ تصدير</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">استيراد JSON</div>
+                  <div class="settings-row-sub">استعادة نسخة احتياطية سابقة</div>
+                </div>
+                <button class="settings-btn" onclick="document.getElementById('importFile').click()">⬆️ استيراد</button>
+                <input type="file" accept=".json" id="importFile" class="import-file-input"
+                  onchange="importJSON(this.files[0])">
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">📊 تصدير البيانات</div>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">استيراد CSV</div>
+                  <div class="settings-row-sub">استيراد من Excel أو CSV خارجي</div>
+                </div>
+                <button class="settings-btn" onclick="document.getElementById('importCSVFile').click()">📥 استيراد
+                  CSV</button>
+                <input type="file" accept=".csv,text/csv" id="importCSVFile" class="import-file-input"
+                  onchange="importCSV(this.files[0])">
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">مشاركة الشهر الحالي</div>
+                  <div class="settings-row-sub" id="share-month-label">انسخ رابط يحتوي بيانات الشهر</div>
+                </div>
+                <button class="settings-btn" onclick="shareMonthURL()">🔗 نسخ الرابط</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">تصدير الشهر الحالي</div>
+                  <div class="settings-row-sub" id="csv-month-label">ميزانية الشهر الحالي</div>
+                </div>
+                <button class="settings-btn" onclick="exportCSV()">📋 CSV</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">تصدير ملخص PNG</div>
+                  <div class="settings-row-sub">صورة قابلة للمشاركة للبطاقات</div>
+                </div>
+                <button class="settings-btn" onclick="exportSummaryPNG()">🖼️ صورة</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">تصدير السنة كاملة</div>
+                  <div class="settings-row-sub" id="csv-year-label">جميع شهور السنة الحالية</div>
+                </div>
+                <button class="settings-btn" onclick="exportYearCSV()">📊 CSV السنة</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">تقرير PDF للشهر</div>
+                  <div class="settings-row-sub" id="pdf-month-label">تقرير مفصّل للشهر الحالي</div>
+                </div>
+                <button class="settings-btn primary" onclick="exportMonthPDF()">📄 PDF الشهر</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">تقرير PDF للسنة</div>
+                  <div class="settings-row-sub" id="pdf-year-label">ملخص سنوي شامل</div>
+                </div>
+                <button class="settings-btn primary" onclick="exportYearPDF()">📑 PDF السنة</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">🗑️ إدارة البيانات</div>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">حذف بيانات الشهر الحالي</div>
+                  <div class="settings-row-sub">لا يمكن التراجع عن هذا الإجراء</div>
+                </div>
+                <button class="settings-btn danger" onclick="clearCurrentMonth()">🗑️ حذف</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">حذف جميع البيانات</div>
+                  <div class="settings-row-sub">مسح كل الشهور نهائياً</div>
+                </div>
+                <button class="settings-btn danger" onclick="clearAllData()">⚠️ مسح الكل</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">🔒 وضع الميزانية الصارمة</div>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">وضع الميزانية الصارمة</div>
+                  <div class="settings-row-sub">يمنع تجاوز المبلغ المخطط في المصاريف</div>
+                </div>
+                <label class="strict-toggle" onclick="toggleStrictMode()">
+                  <div class="strict-toggle-track" id="strictTrack">
+                    <div class="strict-toggle-thumb"></div>
+                  </div>
+                  <span id="strictLabel" style="font-size:12px;color:var(--muted)">معطّل</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section" id="pwa-section" style="display:none">
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-info">
+                  <div class="settings-row-label">تثبيت ميزانيتي</div>
+                  <div class="settings-row-sub">يشتغل بدون إنترنت بعد التثبيت</div>
+                </div>
+                <button class="settings-btn primary" onclick="installApp()">📲 تثبيت</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">🏷️ تخصيص أسماء الأقسام</div>
+            <div class="settings-card" id="catEditorWrap"></div>
+            <div style="padding:8px 4px 0;font-size:11px;color:var(--muted)">تغيير الأسماء والأيقونات يؤثر على جميع
+              الصفحات</div>
+          </div>
+
+          <div class="app-version">ميزانيتي • النسخة 2.0 • البيانات محفوظة محلياً 🔒</div>
+        </section>
+
+      </main>
+    </div>
+
+    <nav class="bottom-nav">
+      <button class="bnav-item active" onclick="go('overview')"><span
+          class="bicon">📊</span><span>اللوحة</span></button>
+      <button class="bnav-item" onclick="go('year')"><span class="bicon">📅</span><span>السنة</span></button>
+      <button class="bnav-item" onclick="go('compare')"><span class="bicon">⚖️</span><span>مقارنة</span></button>
+      <button class="bnav-item" onclick="go('income')"><span class="bicon">💰</span><span>الدخل</span></button>
+      <button class="bnav-item" onclick="go('bills')" data-nav-sec="bills"><span
+          class="bicon">🧾</span><span>الفواتير</span></button>
+      <button class="bnav-item" onclick="go('expenses')" data-nav-sec="expenses"><span
+          class="bicon">🛍️</span><span>المصاريف</span></button>
+      <button class="bnav-item" onclick="go('savings')" data-nav-sec="savings"><span
+          class="bicon">💎</span><span>الادخار</span></button>
+      <button class="bnav-item" onclick="go('debts')" data-nav-sec="debts"><span
+          class="bicon">📋</span><span>الديون</span></button>
+      <button class="bnav-item" onclick="go('settings')"><span class="bicon">⚙️</span><span>إعدادات</span><span
+          class="nav-badge" id="badge-bnav-settings" style="display:none"></span></button>
+    </nav>
+
+  </div>
+
+  <!-- PDF Report Container (مخفي — يظهر عند الطباعة فقط) -->
+  <div id="pdfReport"></div>
+
+  <script src="script.js"></script>
+</body>
+
+</html>
