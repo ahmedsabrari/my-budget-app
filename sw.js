@@ -7,7 +7,7 @@
 // ══════════════════════════════════════════
 
 // ⚠️ بدل هاد الرقم فكل مرة كتنشر نسخة جديدة
-const VERSION = '2.0.1';
+const VERSION = '2.0.2';
 const CACHE_NAME = `miyzaniyati-${VERSION}`;
 
 const CORE_ASSETS = [

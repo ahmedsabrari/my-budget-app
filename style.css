@@ -45,11 +45,17 @@
 
    📱 استراتيجية الاستجابة (Responsive Strategy):
    ─────────────────────────────────────────────────────────────────
-   • < 600px         : هاتف — bottom-nav + header-drawer
-   • ≥ 600px         : tablet لمس — نفس الهاتف، لكن أحجام أكبر
-   • ≥ 768px (mouse) : tab-bar أفقي بدل bottom-nav
-   • ≥ 1100px (mouse): sidebar جانبي + لا tab-bar ولا bottom-nav
-   • ≥ 1400px        : sidebar أعرض + main-content أوسع
+   • < 600px          : هاتف — bottom-nav + header-drawer
+   • ≥ 600px          : tablet — نفس الهاتف، لكن أحجام أكبر
+   • ≥ 768px          : tab-bar أفقي بدل bottom-nav
+   • ≥ 1100px         : sidebar جانبي + لا tab-bar ولا bottom-nav
+   • ≥ 1400px         : sidebar أعرض + main-content أوسع
+
+   ⚠️ ملاحظة: استعملنا width فقط بلا pointer:fine
+   باش الـ sidebar تبان حتى على:
+     - Touch laptops (Windows/Mac)
+     - iPad Pro landscape
+     - DevTools device emulation
    ═══════════════════════════════════════════════════════════════════ */
 
 
@@ -2644,14 +2650,20 @@ html.dark .alert-bar.danger  { background: #2a1515; color: #e06060; }
    ═══════════════════════════════════════════════════════════════════
    الاستراتيجية:
    ─────────────────────────────────────────────────────────────────
-   • 600px+          : tablet لمس — نفس الهاتف بأحجام أكبر
-   • 768px+ (mouse)  : tab-bar بدل bottom-nav
-   • 1100px+ (mouse) : sidebar جانبي
+   • 600px+          : tablet — نفس الهاتف بأحجام أكبر
+   • 768px+          : tab-bar بدل bottom-nav
+   • 1100px+         : sidebar جانبي
    • 1400px+         : main-content أوسع
+
+   ⚠️ ملاحظة: ما استعملناش pointer:fine ولا hover:hover
+   باش الـ sidebar تبان على:
+     - Touch laptops (Windows/Mac)
+     - iPad Pro landscape
+     - DevTools device emulation
    ═══════════════════════════════════════════════════════════════════ */
 
 /* ─────────────────────────────────────────────────────────────
-   ≥ 600px — Tablet (touch)
+   ≥ 600px — Tablet
    ───────────────────────────────────────────────────────────── */
 @media(min-width:600px) {
     :root {
@@ -2725,7 +2737,7 @@ html.dark .alert-bar.danger  { background: #2a1515; color: #e06060; }
     }
 
     .sidebar {
-        display: none !important;
+        display: none;
     }
 
     /* ── Layout ── */
@@ -2801,18 +2813,17 @@ html.dark .alert-bar.danger  { background: #2a1515; color: #e06060; }
 }
 
 /* ─────────────────────────────────────────────────────────────
-   ≥ 768px + pointer:fine — Tablet/Desktop (mouse)
-   الهدف الوحيد: تحويل bottom-nav → tab-bar أفقي
+   ≥ 768px — Tablet/Desktop: تحويل bottom-nav → tab-bar أفقي
    ───────────────────────────────────────────────────────────── */
-@media(min-width:768px) and (pointer:fine) {
+@media(min-width:768px) {
     .tab-bar    { display: block; }
     .bottom-nav { display: none;  }
 }
 
 /* ─────────────────────────────────────────────────────────────
-   ≥ 1100px + pointer:fine — Desktop
+   ≥ 1100px — Desktop: sidebar جانبي
    ───────────────────────────────────────────────────────────── */
-@media(min-width:1100px) and (pointer:fine) {
+@media(min-width:1100px) {
     :root {
         --header-h: 64px;
     }
