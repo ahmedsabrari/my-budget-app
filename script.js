@@ -45,9 +45,26 @@ function defMonthData() {
     };
 }
 
+// ── تحميل + تنقية أولية لبيانات localStorage ──
+function sanitizeAllData(raw) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+    const clean = {};
+    Object.keys(raw).forEach(key => {
+        if (!/^\d{4}-\d{2}$/.test(key)) return;
+        const month = sanitizeMonthData(raw[key]);
+        if (month) clean[key] = month;
+    });
+    return clean;
+}
+
 let ALL = (() => {
-    try { const s = localStorage.getItem('myz_v4'); return s ? JSON.parse(s) : {}; }
-    catch { return {}; }
+    try {
+        const s = localStorage.getItem('myz_v4');
+        if (!s) return {};
+        return sanitizeAllData(JSON.parse(s));
+    } catch {
+        return {};
+    }
 })();
 
 const now = new Date();
@@ -722,46 +739,51 @@ function toggleNote(sec, i) {
 }
 
 // ══════════════════════════════════════════
-//  OVERVIEW
+//  OVERVIEW (perf: getMonthSummary مرة وحدة)
 // ══════════════════════════════════════════
 function updateOverview() {
-    const ip = sumD('income', 'planned'), ia = sumD('income', 'actual');
-    const bp = sumD('bills', 'planned'), ba = sumD('bills', 'actual');
-    const ep = sumD('expenses', 'planned'), ea = sumD('expenses', 'actual');
-    const sp = sumD('savings', 'planned'), sa = sumD('savings', 'actual');
-    const dp = sumD('debts', 'planned'), da = sumD('debts', 'actual');
+    // ⚡ حساب واحد بدل 10 استدعاءات sumD
+    const s = getMonthSummary(D);
+    const ip = s.ip, ia = s.ia;
+    const bp = s.bp, ba = s.ba;
+    const ep = s.ep, ea = s.ea;
+    const sp = s.sp, sa = s.sa;
+    const dp = s.dp, da = s.da;
     const totalP = bp + ep + sp + dp, totalA = ba + ea + sa + da;
     const hasIncome = (ia || ip) > 0;
     const remP = hasIncome ? ip - totalP : 0;
     const remA = hasIncome ? ia - totalA : 0;
     const pct = (v, t) => t > 0 ? Math.round(Math.abs(v) / t * 100) : 0;
-    const s = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = fmt(v); };
+    const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = fmt(v); };
+
     const incFmt = fmt(ia || ip);
     document.getElementById('headerIncome').textContent = incFmt;
     const mInc = document.getElementById('headerIncomeMobile');
     if (mInc) mInc.textContent = incFmt;
-    s('ov-inc', ia || ip);
-    s('ov-rem', hasIncome ? (remA || remP) : 0);
+    setTxt('ov-inc', ia || ip);
+    setTxt('ov-rem', hasIncome ? (remA || remP) : 0);
     document.getElementById('ov-rem-p').textContent = hasIncome ? pct(remA || remP, ia || ip) + '% من الدخل' : 'أدخل راتبك أولاً';
-    s('ov-spt', hasIncome ? (totalA || totalP) : 0);
+    setTxt('ov-spt', hasIncome ? (totalA || totalP) : 0);
     document.getElementById('ov-spt-p').textContent = hasIncome ? pct(totalA || totalP, ia || ip) + '% من الدخل' : '—';
-    s('ov-sav', hasIncome ? (sa || sp) : 0);
+    setTxt('ov-sav', hasIncome ? (sa || sp) : 0);
     document.getElementById('ov-sav-p').textContent = hasIncome ? pct(sa || sp, ia || ip) + '% من الدخل' : '—';
-    s('cf-ip', ip); s('cf-ia', ia);
-    s('cf-bp', bp); s('cf-ba', ba);
-    s('cf-ep', ep); s('cf-ea', ea);
-    s('cf-sp', sp); s('cf-sa', sa);
-    s('cf-dp', dp); s('cf-da', da);
-    s('cf-rp', remP); s('cf-ra', remA);
+    setTxt('cf-ip', ip); setTxt('cf-ia', ia);
+    setTxt('cf-bp', bp); setTxt('cf-ba', ba);
+    setTxt('cf-ep', ep); setTxt('cf-ea', ea);
+    setTxt('cf-sp', sp); setTxt('cf-sa', sa);
+    setTxt('cf-dp', dp); setTxt('cf-da', da);
+    setTxt('cf-rp', remP); setTxt('cf-ra', remA);
     const rpEl = document.getElementById('cf-rp');
     const raEl = document.getElementById('cf-ra');
     if (rpEl) rpEl.style.color = remP >= 0 ? 'var(--green)' : 'var(--danger)';
     if (raEl) raEl.style.color = remA >= 0 ? 'var(--green)' : 'var(--danger)';
-    if (cur === 'overview') updateCharts();
+
+    // ⚡ نمرّر نفس summary للدوال الفرعية
+    if (cur === 'overview') updateCharts(s);
     checkAlerts();
     updateSpendingRate(totalA, totalP, ia || ip);
-    updateHealthScore();
-    if (cur === 'overview') updateOverviewBarChart();
+    updateHealthScore(s);
+    if (cur === 'overview') updateOverviewBarChart(s);
     updateSettingsBadge();
 }
 
@@ -802,11 +824,14 @@ function checkAlerts() {
 }
 
 let donut = null;
-function updateCharts() {
-    const ba = sumD('bills', 'actual') || sumD('bills', 'planned');
-    const ea = sumD('expenses', 'actual') || sumD('expenses', 'planned');
-    const sa = sumD('savings', 'actual') || sumD('savings', 'planned');
-    const da = sumD('debts', 'actual') || sumD('debts', 'planned');
+// ⚡ updateCharts تقبل summary اختياري
+function updateCharts(summary) {
+    const s = summary || getMonthSummary(D);
+    const ba = s.ba || s.bp;
+    const ea = s.ea || s.ep;
+    const sa = s.sa || s.sp;
+    const da = s.da || s.dp;
+
     const ctx = document.getElementById('donutChart');
     if (!ctx) return;
     if (donut) donut.destroy();
@@ -831,10 +856,10 @@ function updateCharts() {
         }
     });
     const vals = {
-        bills: { p: sumD('bills', 'planned'), a: sumD('bills', 'actual') },
-        expenses: { p: sumD('expenses', 'planned'), a: sumD('expenses', 'actual') },
-        savings: { p: sumD('savings', 'planned'), a: sumD('savings', 'actual') },
-        debts: { p: sumD('debts', 'planned'), a: sumD('debts', 'actual') }
+        bills: { p: s.bp, a: s.ba },
+        expenses: { p: s.ep, a: s.ea },
+        savings: { p: s.sp, a: s.sa },
+        debts: { p: s.dp, a: s.da }
     };
     const maxP = Math.max(...Object.values(vals).map(v => v.p), 1);
     Object.entries(vals).forEach(([k, { p, a }]) => {
@@ -854,7 +879,7 @@ function changeYear(dir) {
     renderYearView();
 }
 
-// ── M3: getMonthStats أصبحت مبنية على getMonthSummary ──
+// ── M3: getMonthStats مبنية على getMonthSummary ──
 function getMonthStats(y, m) {
     const data = peekMonth(y, m);
     if (!data) return null;
@@ -1096,14 +1121,22 @@ function importJSON(file) {
     document.getElementById('importFile').value = '';
 }
 
+// ── CSV quote helper: يحمي من CSV/Formula Injection ──
+// إذا بدأت القيمة بـ = + - @ TAB CR → نضيف apostrophe في الأول
+// باش Excel/Google Sheets ما يفسّروهاش كصيغة
+function csvQuote(s) {
+    let v = String(s ?? '');
+    if (/^[=+\-@\t\r]/.test(v)) v = "'" + v;
+    return `"${v.replace(/"/g, '""')}"`;
+}
+
 function exportCSV() {
     const secNames = {};
     SECS.forEach(s => secNames[s] = getCat(s).label);
     let csv = 'القسم,الاسم,المخطط,الفعلي,الملاحظة,التاريخ,تكرار\n';
-    const q = s => `"${String(s || '').replace(/"/g, '""')}"`;
     SECS.forEach(sec => {
         D[sec].forEach(r => {
-            csv += `${q(secNames[sec])},${q(r.name)},${r.planned || 0},${r.actual || 0},${q(r.note)},${q(r.date || '')},${r.repeat ? 'true' : 'false'}\n`;
+            csv += `${csvQuote(secNames[sec])},${csvQuote(r.name)},${r.planned || 0},${r.actual || 0},${csvQuote(r.note)},${csvQuote(r.date || '')},${r.repeat ? 'true' : 'false'}\n`;
         });
     });
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
@@ -1441,7 +1474,6 @@ function renderCompare() {
     const cols = [sel1, sel2, ...(sel3 ? [sel3] : [])];
     const getLabel = k => { const [y, m] = k.split('-'); return AR_MONTHS[+m - 1] + '\n' + y; };
 
-    // ── M3: نستخدم getMonthSummary بدل تكرار sumM ──
     const getData = k => {
         const data = peekMonth(...k.split('-').map(Number));
         if (!data) return { income: 0, bills: 0, expenses: 0, savings: 0, debts: 0, total: 0 };
@@ -1556,14 +1588,13 @@ function exportYearCSV() {
     const secNames = {};
     SECS.forEach(s => secNames[s] = getCat(s).label);
     let csv = 'الشهر,القسم,الاسم,المخطط,الفعلي,الملاحظة,التاريخ,تكرار\n';
-    const q = s => `"${String(s || '').replace(/"/g, '""')}"`;
     for (let m = 1; m <= 12; m++) {
         const data = peekMonth(curYear, m);
         if (!data) continue;
         const mLabel = AR_MONTHS[m - 1];
         SECS.forEach(sec => {
             data[sec].forEach(r => {
-                csv += `${q(mLabel)},${q(secNames[sec])},${q(r.name)},${r.planned || 0},${r.actual || 0},${q(r.note)},${q(r.date || '')},${r.repeat ? 'true' : 'false'}\n`;
+                csv += `${csvQuote(mLabel)},${csvQuote(secNames[sec])},${csvQuote(r.name)},${r.planned || 0},${r.actual || 0},${csvQuote(r.note)},${csvQuote(r.date || '')},${r.repeat ? 'true' : 'false'}\n`;
             });
         });
     }
@@ -1754,21 +1785,21 @@ function calcDebtAvgForRow(name) {
 }
 
 // ══════════════════════════════════════════
-//  BUDGET HEALTH SCORE
+//  BUDGET HEALTH SCORE (perf: summary اختياري)
 // ══════════════════════════════════════════
-function updateHealthScore() {
+function updateHealthScore(summary) {
     const card = document.getElementById('healthCard');
     if (!card) return;
-    const ia = sumD('income', 'actual'), ip = sumD('income', 'planned');
-    const income = ia || ip;
+    const s = summary || getMonthSummary(D);
+    const income = s.ia || s.ip;
     if (!income) { card.style.display = 'none'; return; }
     card.style.display = 'flex';
 
     let score = 50;
-    const ba = sumD('bills', 'actual') || sumD('bills', 'planned');
-    const ea = sumD('expenses', 'actual') || sumD('expenses', 'planned');
-    const sa = sumD('savings', 'actual') || sumD('savings', 'planned');
-    const da = sumD('debts', 'actual') || sumD('debts', 'planned');
+    const ba = s.ba || s.bp;
+    const ea = s.ea || s.ep;
+    const sa = s.sa || s.sp;
+    const da = s.da || s.dp;
     const total = ba + ea + sa + da;
 
     if (income > 0) score += 10;
@@ -1899,7 +1930,6 @@ function exportYearPDF() {
             allMonthsStats.push({ m, hasData: false });
             continue;
         }
-        // ── M3: نستخدم getMonthSummary بدل تكرار الحسابات ──
         const s = getMonthSummary(data);
         totalIncome += s.income;
         totalSpent += s.total;
@@ -2093,23 +2123,23 @@ function applyRepeatRows() {
 }
 
 // ══════════════════════════════════════════
-//  OVERVIEW BAR CHART
+//  OVERVIEW BAR CHART (perf: summary اختياري)
 // ══════════════════════════════════════════
 let overviewBarInst = null;
 
-function updateOverviewBarChart() {
+function updateOverviewBarChart(summary) {
     const card = document.getElementById('overviewBarCard');
     const ctx = document.getElementById('overviewBarChart');
     if (!card || !ctx) return;
 
-    const secs = ['bills', 'expenses', 'savings', 'debts'];
-    const planned = secs.map(s => sumD(s, 'planned'));
-    const actual = secs.map(s => sumD(s, 'actual'));
+    const s = summary || getMonthSummary(D);
+    const planned = [s.bp, s.ep, s.sp, s.dp];
+    const actual = [s.ba, s.ea, s.sa, s.da];
     const hasData = planned.some(v => v > 0) || actual.some(v => v > 0);
     if (!hasData) { card.style.display = 'none'; return; }
     card.style.display = 'block';
 
-    const labels = secs.map(s => getCat(s).label);
+    const labels = ['bills', 'expenses', 'savings', 'debts'].map(k => getCat(k).label);
     const tickColor = isDark ? '#6b6880' : '#8a8480';
     const gridColor = isDark ? '#2a2d3a' : '#ede9e4';
 
@@ -2139,7 +2169,7 @@ function updateOverviewBarChart() {
 }
 
 // ══════════════════════════════════════════
-//  IMPORT CSV
+//  IMPORT CSV (perf: sanitizeRow على كل صف)
 // ══════════════════════════════════════════
 function importCSV(file) {
     if (isReadonly) {
@@ -2203,16 +2233,18 @@ function importCSV(file) {
                 const name = getCol(row, idx.name);
                 if (!name) return;
 
-                const entry = {
+                // ── بناء خام ثم المرور على sanitizeRow (طول، نوع، سالب، تاريخ) ──
+                const rawEntry = {
                     name,
-                    planned: parseFloat(getCol(row, idx.plan)) || 0,
-                    actual: parseFloat(getCol(row, idx.actual)) || 0,
+                    planned: parseFloat(getCol(row, idx.plan)),
+                    actual: parseFloat(getCol(row, idx.actual)),
                     note: getCol(row, idx.note),
-                    date: (() => { const d = getCol(row, idx.date); return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : ''; })(),
+                    date: getCol(row, idx.date),
                     repeat: getCol(row, idx.repeat) === 'true' || getCol(row, idx.repeat) === 'نعم',
                 };
 
-                if (sec) { newRows[sec].push(entry); added++; }
+                const entry = sanitizeRow(rawEntry);
+                if (sec && entry) { newRows[sec].push(entry); added++; }
                 else { skipped++; }
             });
 
