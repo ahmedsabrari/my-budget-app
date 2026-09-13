@@ -1,48 +1,59 @@
 // ══════════════════════════════════════════
 //  Service Worker — ميزانيتي
-//  استراتيجية: Cache First + Network Fallback
+//  استراتيجية هجينة:
+//    - HTML: Network-First (ديما آخر نسخة، fallback للكاش)
+//    - JS/CSS/JSON: Stale-While-Revalidate (سريع + تحديث خلفي)
+//    - أصول ثابتة (fonts, libs): Cache-First
 // ══════════════════════════════════════════
 
-const CACHE_NAME = 'miyzaniyati-v1';
+// ⚠️ بدل هاد الرقم فكل مرة كتنشر نسخة جديدة
+const VERSION = '2.0.1';
+const CACHE_NAME = `miyzaniyati-${VERSION}`;
 
-// الملفات الأساسية اللي كيتخزنو فور التثبيت
 const CORE_ASSETS = [
   './',
   './index.html',
   './style.css',
   './script.js',
-  './manifest.json'
+  './manifest.json',
+  './chart.umd.min.js'
 ];
 
-// ملفات خارجية (CDN) — نخزنها بشكل منفصل باش ما نفشلوش التثبيت
 const EXTERNAL_ASSETS = [
-  'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
-  'https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&family=Cairo:wght@300;400;600;700&display=swap'
+  'https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&family=Cairo:wght@300;400;600;700&display=swap',
+  'https://fonts.gstatic.com/'
 ];
 
-// ─── 1. تثبيت الـ SW: تخزين الملفات ───
+// HTML → Network-First
+const NETWORK_FIRST_PATTERNS = [
+  /\.html?$/i,
+  /\/$/           // المسار الجذري (root)
+];
+
+// JS / CSS / JSON → Stale-While-Revalidate
+const SWR_PATTERNS = [
+  /\.(js|css|json)$/i
+];
+
+// ─── 1. Install ───
 self.addEventListener('install', event => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE_NAME);
-
-      // 1. تخزين الملفات المحلية (إلزامية)
       await cache.addAll(CORE_ASSETS);
 
-      // 2. محاولة تخزين الملفات الخارجية (بدون فشل التثبيت)
       await Promise.allSettled(
         EXTERNAL_ASSETS.map(url =>
           cache.add(url).catch(err => console.warn('[SW] ⚠️ فشل تخزين:', url, err))
         )
       );
 
-      // تفعيل SW الجديد فوراً بدون انتظار
       await self.skipWaiting();
     })()
   );
 });
 
-// ─── 2. تفعيل الـ SW: تنظيف الكاش القديم ───
+// ─── 2. Activate ───
 self.addEventListener('activate', event => {
   event.waitUntil(
     (async () => {
@@ -56,57 +67,116 @@ self.addEventListener('activate', event => {
           })
       );
       await self.clients.claim();
+
+      // ⚡ تنبيه جميع الصفحات المفتوحة أن نسخة جديدة ولات نشيطة
+      const clients = await self.clients.matchAll({ type: 'window' });
+      clients.forEach(client => {
+        client.postMessage({ type: 'SW_UPDATED', version: VERSION });
+      });
     })()
   );
 });
 
-// ─── 3. اعتراض الطلبات ───
+// ─── 3. Fetch ───
 self.addEventListener('fetch', event => {
   const { request } = event;
-
-  // نتجاهل الطلبات غير GET (مثل POST)
   if (request.method !== 'GET') return;
 
-  // نتجاهل الطلبات لمواقع أخرى خارج نطاقنا (إلا لو كانت ضمن القائمة المسموحة)
   const url = new URL(request.url);
   const isSameOrigin = url.origin === self.location.origin;
-  const isAllowedExternal = EXTERNAL_ASSETS.some(allowed =>
-    request.url.startsWith(allowed.split('?')[0])
-  );
+
+  const isAllowedExternal = EXTERNAL_ASSETS.some(allowed => {
+    try {
+      const a = new URL(allowed);
+      return a.origin === url.origin;
+    } catch { return false; }
+  });
 
   if (!isSameOrigin && !isAllowedExternal) return;
 
-  event.respondWith(
-    (async () => {
-      // 1. نحاول نلقاو النسخة في الكاش أولاً
-      const cachedResponse = await caches.match(request);
-      if (cachedResponse) return cachedResponse;
+  const path = url.pathname;
 
-      // 2. ماشي في الكاش → نطلبو من الشبكة
-      try {
-        const networkResponse = await fetch(request);
-
-        // 3. إذا الاستجابة ناجحة، نخزنوها للاستخدام المستقبلي
-        if (networkResponse && networkResponse.status === 200) {
-          const cache = await caches.open(CACHE_NAME);
-          cache.put(request, networkResponse.clone());
-        }
-
-        return networkResponse;
-      } catch (err) {
-        // 4. فشلت الشبكة وما كاينة نسخة في الكاش
-        // إذا كان طلب HTML، نرجعو index.html المحفوظ
-        if (request.headers.get('accept')?.includes('text/html')) {
-          const offlinePage = await caches.match('./index.html');
-          if (offlinePage) return offlinePage;
-        }
-
-        return new Response('⚠️ أنت غير متصل بالإنترنت', {
-          status: 503,
-          statusText: 'Offline',
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-        });
-      }
-    })()
-  );
+  // اختيار الاستراتيجية
+  if (isSameOrigin && NETWORK_FIRST_PATTERNS.some(re => re.test(path))) {
+    event.respondWith(networkFirst(request));
+  } else if (isSameOrigin && SWR_PATTERNS.some(re => re.test(path))) {
+    event.respondWith(staleWhileRevalidate(request));
+  } else {
+    event.respondWith(cacheFirst(request));
+  }
 });
+
+// ══════════════════════════════════════════
+//  الاستراتيجيات
+// ══════════════════════════════════════════
+
+// ─── Network-First: HTML ───
+async function networkFirst(request) {
+  const cache = await caches.open(CACHE_NAME);
+  try {
+    const networkResponse = await fetch(request);
+    if (networkResponse && networkResponse.status === 200) {
+      cache.put(request, networkResponse.clone());
+    }
+    return networkResponse;
+  } catch (err) {
+    // فشلت الشبكة → نرجعو للكاش
+    const cached = await cache.match(request);
+    if (cached) return cached;
+
+    if (request.headers.get('accept')?.includes('text/html')) {
+      const offline = await cache.match('./index.html');
+      if (offline) return offline;
+    }
+
+    return new Response('⚠️ أنت غير متصل بالإنترنت', {
+      status: 503,
+      statusText: 'Offline',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+    });
+  }
+}
+
+// ─── Stale-While-Revalidate: JS/CSS/JSON ───
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+
+  // نجيبو النسخة الجديدة فالخلفية (بلا ما نسنّاو المستخدم)
+  const fetchPromise = fetch(request)
+    .then(networkResponse => {
+      if (networkResponse && networkResponse.status === 200) {
+        cache.put(request, networkResponse.clone());
+      }
+      return networkResponse;
+    })
+    .catch(() => null);
+
+  // نرجعو الكاش فوراً إلا كان، وإلا نستناو الشبكة
+  return cached || (await fetchPromise) || new Response('', { status: 503 });
+}
+
+// ─── Cache-First: fonts / libs ───
+async function cacheFirst(request) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+
+  try {
+    const networkResponse = await fetch(request);
+    if (networkResponse && networkResponse.status === 200) {
+      const cache = await caches.open(CACHE_NAME);
+      cache.put(request, networkResponse.clone());
+    }
+    return networkResponse;
+  } catch (err) {
+    if (request.headers.get('accept')?.includes('text/html')) {
+      const offline = await caches.match('./index.html');
+      if (offline) return offline;
+    }
+    return new Response('⚠️ أنت غير متصل بالإنترنت', {
+      status: 503,
+      statusText: 'Offline',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+    });
+  }
+}

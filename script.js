@@ -84,6 +84,32 @@ const save = () => {
 const sumD = (sec, f) => D[sec].reduce((s, r) => s + (r[f] || 0), 0);
 const sumM = (data, sec, f) => data[sec].reduce((s, r) => s + (r[f] || 0), 0);
 
+// ── M3: ملخص موحّد لشهر (income / bills / expenses / savings / debts) ──
+// كيرجع القيم الموحّدة (للعرض) + القيم الخام (للحسابات الدقيقة)
+function getMonthSummary(data) {
+    if (!data) return null;
+    const ia = sumM(data, 'income', 'actual'), ip = sumM(data, 'income', 'planned');
+    const ba = sumM(data, 'bills', 'actual'), bp = sumM(data, 'bills', 'planned');
+    const ea = sumM(data, 'expenses', 'actual'), ep = sumM(data, 'expenses', 'planned');
+    const sa = sumM(data, 'savings', 'actual'), sp = sumM(data, 'savings', 'planned');
+    const da = sumM(data, 'debts', 'actual'), dp = sumM(data, 'debts', 'planned');
+
+    const income = ia || ip;
+    const bills = ba || bp;
+    const expenses = ea || ep;
+    const savings = sa || sp;
+    const debts = da || dp;
+    const total = bills + expenses + savings + debts;
+    const totalPlanned = bp + ep + sp + dp;
+    const rem = income - total;
+
+    return {
+        income, bills, expenses, savings, debts, total, totalPlanned, rem,
+        hasIncome: income > 0,
+        ia, ip, ba, bp, ea, ep, sa, sp, da, dp
+    };
+}
+
 // ── XSS PROTECTION ──
 function esc(s) {
     return String(s || '')
@@ -93,6 +119,32 @@ function esc(s) {
         .replace(/>/g, '&gt;');
 }
 
+// ── ROW SANITIZER (protects against malformed rows) ──
+function sanitizeRow(row) {
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) return null;
+
+    const clean = {};
+
+    clean.name = String(row.name ?? '').slice(0, 100).trim();
+    if (!clean.name) clean.name = 'بند بدون اسم';
+
+    const toNum = v => {
+        const n = Number(v);
+        return Number.isFinite(n) && n >= 0 ? n : 0;
+    };
+    clean.planned = toNum(row.planned);
+    clean.actual = toNum(row.actual);
+
+    clean.note = String(row.note ?? '').slice(0, 500);
+
+    const d = String(row.date ?? '');
+    clean.date = /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '';
+
+    clean.repeat = row.repeat === true;
+
+    return clean;
+}
+
 // ── PROTOTYPE POLLUTION PROTECTION ──
 function sanitizeMonthData(data) {
     if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
@@ -100,16 +152,36 @@ function sanitizeMonthData(data) {
     const cleanData = {};
     Object.keys(data).forEach(key => {
         if (allowedSections.includes(key) && Array.isArray(data[key])) {
-            cleanData[key] = data[key];
+            cleanData[key] = data[key]
+                .map(sanitizeRow)
+                .filter(Boolean);
         }
     });
     ['income', 'bills', 'expenses', 'savings', 'debts'].forEach(sec => {
         if (!cleanData[sec]) cleanData[sec] = [];
     });
     if (data._note && typeof data._note === 'string') {
-        cleanData._note = data._note;
+        cleanData._note = data._note.slice(0, 1000);
     }
     return cleanData;
+}
+
+// ── UTF-8 <-> Base64 (بدل escape/unescape المهجورة) ──
+function utf8ToBase64(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+}
+
+function base64ToUtf8(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
 // ── CURRENCY ──
@@ -335,103 +407,111 @@ function resetOneSec(sec) {
 }
 
 // ══════════════════════════════════════════
-//  RENDER ROWS
+//  M1: مساعدات renderRows (focus / build / filters)
 // ══════════════════════════════════════════
-function renderRows(sec) {
-    const container = document.getElementById('card-' + sec);
-    if (!container) return;
 
-    const focusedEl = document.activeElement;
-    const focusedIdx = focusedEl?.closest('.data-row')?.dataset?.idx;
-    const focusedField = focusedEl?.classList?.contains('amt-inp')
-        ? (focusedEl.closest('.amt-field')?.querySelector('.amt-lbl')
-            ?.textContent?.includes('الفعلي') ? 'actual' : 'planned')
+// ── M1: التقاط حالة التركيز الحالية (قبل إعادة البناء) ──
+function captureFocusState() {
+    const el = document.activeElement;
+    const idx = el?.closest('.data-row')?.dataset?.idx;
+    if (idx === undefined) return { idx: null, field: null };
+    const field = el.classList?.contains('amt-inp')
+        ? (el.closest('.amt-field')?.querySelector('.amt-lbl')?.textContent?.includes('الفعلي')
+            ? 'actual' : 'planned')
         : null;
+    return { idx, field };
+}
 
-    const savedSearch = searchState[sec] || '';
-    const rows = D[sec];
+// ── M1: استعادة التركيز بعد إعادة البناء ──
+function restoreFocus(container, idx, field) {
+    if (idx === null || !field) return;
+    setTimeout(() => {
+        const row = container.querySelector(`.data-row[data-idx="${idx}"]`);
+        if (!row) return;
+        const inputs = row.querySelectorAll('.amt-inp');
+        const target = field === 'actual' ? inputs[1] : inputs[0];
+        if (target) target.focus({ preventScroll: true });
+    }, 0);
+}
+
+// ── M1: بناء HTML ديال صف واحد ──
+function buildRowHTML(row, i, sec) {
     const isInc = sec === 'income';
-    const meta = getCat(sec);
-    const total = sumD(sec, 'actual') || sumD(sec, 'planned');
-    let rowsHTML = '';
-    if (!rows.length) {
-        rowsHTML = '<div class="empty-state">لا يوجد بيانات — اضغط + للإضافة</div>';
-    } else {
-        rows.forEach((row, i) => {
-            const diff = (row.actual || 0) - (row.planned || 0);
-            const has = (row.actual || 0) > 0;
-            let dc = 'd-no', dt = '—';
-            if (has) {
-                if (isInc) { dc = diff >= 0 ? 'd-ok' : 'd-ov'; dt = (diff >= 0 ? '+' : '') + fmtN(diff); }
-                else { dc = diff <= 0 ? 'd-ok' : 'd-ov'; dt = fmtN(diff); }
-            }
-            rowsHTML += `<div class="data-row" draggable="true" data-sec="${sec}" data-idx="${i}"
-        ondragstart="onDragStart(event,${i})" ondragover="onDragOver(event)" ondrop="onDrop(event,'${sec}',${i})"
-        ondragend="onDragEnd(event)" ondragleave="onDragLeave(event)">
-        <div class="row-top">
-          <span class="drag-handle" title="اسحب لإعادة الترتيب">⠿</span>
-          <input class="row-name" type="text" value="${esc(row.name)}" placeholder="الاسم"
-            onchange="upField('${sec}',${i},'name',this.value)">
-          <button class="del-btn" onclick="delRow('${sec}',${i})">✕</button>
-        </div>
-        <div class="row-amounts">
-          <div class="amt-field">
-            <div class="amt-lbl">المخطط</div>
-            <input class="amt-inp" type="number" value="${row.planned || ''}" placeholder="0"
-              onchange="upField('${sec}',${i},'planned',+this.value)">
-            <button class="copy-amt-btn" onclick="copyAmt(${row.planned || 0})" title="نسخ الرقم">⎘</button>
-          </div>
-          <div class="amt-field">
-            <div class="amt-lbl">الفعلي</div>
-            <input class="amt-inp${has ? ' filled' : ''}" type="number" value="${row.actual || ''}" placeholder="0"
-              ${(() => { const p = row.planned || 0; const a = row.actual || 0; return (isStrictMode && p > 0 && a > p && sec !== 'income' && sec !== 'savings') ? 'data-overspent' : '' })()}
-              onchange="upField('${sec}',${i},'actual',+this.value)">
-            <button class="copy-amt-btn" onclick="copyAmt(${row.actual || 0})" title="نسخ الرقم">⎘</button>
-          </div>
-          ${!isInc ? `<div class="diff-field"><div class="amt-lbl">الفرق</div><span class="diff-chip ${dc}">${dt}</span></div>` : ''}
-        </div>
-        ${(() => {
-                    if (sec !== 'savings') return '';
-                    const pct = row.planned > 0 ? Math.min((row.actual || 0) / row.planned * 100, 100) : 0;
-                    const barColor = pct < 30 ? '#c9615a' : pct < 70 ? '#e0b060' : '#4a9e7f';
-                    const remaining = (row.planned || 0) - (row.actual || 0);
-                    return `<div class="saving-goal">
-            <div class="sg-bar-wrap"><div class="sg-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>
-            <div class="sg-meta">
-              <span style="color:${barColor};font-weight:800">${Math.round(pct)}%</span>
-              <span style="color:var(--muted);font-size:11px">${remaining > 0 ? 'متبقي: ' + fmtN(remaining) + ' ' + getCurr() : '✅ اكتمل الهدف!'}</span>
-            </div>
-          </div>`;
-                })()}
-        <div class="note-wrap" id="note-${sec}-${i}" style="display:${row.note ? 'block' : 'none'}">
-          <textarea class="note-inp" placeholder="أضف ملاحظة..."
-            onchange="upField('${sec}',${i},'note',this.value)">${esc(row.note)}</textarea>
-        </div>
-        <button class="note-toggle ${row.note ? 'has-note' : ''}" onclick="toggleNote('${sec}',${i})">
-          ${row.note ? '📝 ' + esc(row.note.substring(0, 20)) + (row.note.length > 20 ? '...' : '') : '＋ ملاحظة'}
-        </button>
-        <div class="date-field">
-          <span class="date-lbl">📅</span>
-          <input class="date-inp" type="date" value="${esc(row.date || '')}"
-            onchange="upField('${sec}',${i},'date',this.value)" title="تاريخ الدفع">
-          <button class="repeat-toggle${row.repeat ? ' active' : ''}" onclick="toggleRepeat('${sec}',${i})" title="تكرار شهري">
-            🔁 ${row.repeat ? 'متكرر' : 'تكرار'}
-          </button>
-        </div>
-      </div>`;
-        });
+    const diff = (row.actual || 0) - (row.planned || 0);
+    const has = (row.actual || 0) > 0;
+    let dc = 'd-no', dt = '—';
+    if (has) {
+        if (isInc) { dc = diff >= 0 ? 'd-ok' : 'd-ov'; dt = (diff >= 0 ? '+' : '') + fmtN(diff); }
+        else { dc = diff <= 0 ? 'd-ok' : 'd-ov'; dt = fmtN(diff); }
     }
-    container.innerHTML = `<div class="tracker-card">
-    <div class="tracker-head"><span>${esc(meta.icon)} ${esc(meta.label)}</span><span class="total-chip" id="chip-${sec}">${fmt(total)}</span></div>
-    <div class="rows-wrap">${rowsHTML}</div>
-    <button class="add-btn" onclick="addRow('${sec}')">${meta.addTxt}</button>
-  </div>`;
-    if (sec === 'income') { const b = document.getElementById('income-big'); if (b) b.textContent = fmt(total); }
 
-    if (savedSearch) {
-        searchState[sec] = savedSearch;
-        filterRows(sec, savedSearch);
+    let savingsHTML = '';
+    if (sec === 'savings') {
+        const pct = row.planned > 0 ? Math.min((row.actual || 0) / row.planned * 100, 100) : 0;
+        const barColor = pct < 30 ? '#c9615a' : pct < 70 ? '#e0b060' : '#4a9e7f';
+        const remaining = (row.planned || 0) - (row.actual || 0);
+        savingsHTML = `<div class="saving-goal">
+      <div class="sg-bar-wrap"><div class="sg-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>
+      <div class="sg-meta">
+        <span style="color:${barColor};font-weight:800">${Math.round(pct)}%</span>
+        <span style="color:var(--muted);font-size:11px">${remaining > 0 ? 'متبقي: ' + fmtN(remaining) + ' ' + getCurr() : '✅ اكتمل الهدف!'}</span>
+      </div>
+    </div>`;
     }
+
+    const overspentAttr = (() => {
+        const p = row.planned || 0, a = row.actual || 0;
+        return (isStrictMode && p > 0 && a > p && sec !== 'income' && sec !== 'savings') ? 'data-overspent' : '';
+    })();
+
+    return `<div class="data-row" draggable="true" data-sec="${sec}" data-idx="${i}"
+    ondragstart="onDragStart(event,${i})" ondragover="onDragOver(event)" ondrop="onDrop(event,'${sec}',${i})"
+    ondragend="onDragEnd(event)" ondragleave="onDragLeave(event)">
+    <div class="row-top">
+      <span class="drag-handle" title="اسحب لإعادة الترتيب">⠿</span>
+      <input class="row-name" type="text" value="${esc(row.name)}" placeholder="الاسم"
+        onchange="upField('${sec}',${i},'name',this.value)">
+      <button class="del-btn" onclick="delRow('${sec}',${i})">✕</button>
+    </div>
+    <div class="row-amounts">
+      <div class="amt-field">
+        <div class="amt-lbl">المخطط</div>
+        <input class="amt-inp" type="number" value="${row.planned || ''}" placeholder="0"
+          onchange="upField('${sec}',${i},'planned',+this.value)">
+        <button class="copy-amt-btn" onclick="copyAmt(${row.planned || 0})" title="نسخ الرقم">⎘</button>
+      </div>
+      <div class="amt-field">
+        <div class="amt-lbl">الفعلي</div>
+        <input class="amt-inp${has ? ' filled' : ''}" type="number" value="${row.actual || ''}" placeholder="0"
+          ${overspentAttr}
+          onchange="upField('${sec}',${i},'actual',+this.value)">
+        <button class="copy-amt-btn" onclick="copyAmt(${row.actual || 0})" title="نسخ الرقم">⎘</button>
+      </div>
+      ${!isInc ? `<div class="diff-field"><div class="amt-lbl">الفرق</div><span class="diff-chip ${dc}">${dt}</span></div>` : ''}
+    </div>
+    ${savingsHTML}
+    <div class="note-wrap" id="note-${sec}-${i}" style="display:${row.note ? 'block' : 'none'}">
+      <textarea class="note-inp" placeholder="أضف ملاحظة..."
+        onchange="upField('${sec}',${i},'note',this.value)">${esc(row.note)}</textarea>
+    </div>
+    <button class="note-toggle ${row.note ? 'has-note' : ''}" onclick="toggleNote('${sec}',${i})">
+      ${row.note ? '📝 ' + esc(row.note.substring(0, 20)) + (row.note.length > 20 ? '...' : '') : '＋ ملاحظة'}
+    </button>
+    <div class="date-field">
+      <span class="date-lbl">📅</span>
+      <input class="date-inp" type="date" value="${esc(row.date || '')}"
+        onchange="upField('${sec}',${i},'date',this.value)" title="تاريخ الدفع">
+      <button class="repeat-toggle${row.repeat ? ' active' : ''}" onclick="toggleRepeat('${sec}',${i})" title="تكرار شهري">
+        🔁 ${row.repeat ? 'متكرر' : 'تكرار'}
+      </button>
+    </div>
+  </div>`;
+}
+
+// ── M1: إعادة تطبيق الفلاتر النشيطة (بحث + تاريخ) ──
+function applyActiveFilters(sec) {
+    const savedSearch = searchState[sec];
+    if (savedSearch) filterRows(sec, savedSearch);
 
     const df = dateFilterState[sec];
     if (df?.from || df?.to) {
@@ -445,19 +525,105 @@ function renderRows(sec) {
         if (fromEl && df.from) fromEl.value = df.from;
         if (toEl && df.to) toEl.value = df.to;
     }
+}
 
-    if (focusedIdx !== undefined && focusedField) {
-        setTimeout(() => {
-            const row = container.querySelector(`[data-idx="${focusedIdx}"]`);
-            if (row) {
-                const inputs = row.querySelectorAll('.amt-inp');
-                const target = focusedField === 'actual' ? inputs[1] : inputs[0];
-                if (target) target.focus({ preventScroll: true });
-            }
-        }, 0);
+// ══════════════════════════════════════════
+//  RENDER ROWS (M1 — نسخة مختصرة)
+// ══════════════════════════════════════════
+function renderRows(sec) {
+    const container = document.getElementById('card-' + sec);
+    if (!container) return;
+
+    const { idx: focusedIdx, field: focusedField } = captureFocusState();
+    const rows = D[sec];
+    const meta = getCat(sec);
+    const total = sumD(sec, 'actual') || sumD(sec, 'planned');
+
+    let rowsHTML = rows.length
+        ? rows.map((row, i) => buildRowHTML(row, i, sec)).join('')
+        : '<div class="empty-state">لا يوجد بيانات — اضغط + للإضافة</div>';
+
+    container.innerHTML = `<div class="tracker-card">
+    <div class="tracker-head"><span>${esc(meta.icon)} ${esc(meta.label)}</span><span class="total-chip" id="chip-${sec}">${fmt(total)}</span></div>
+    <div class="rows-wrap">${rowsHTML}</div>
+    <button class="add-btn" onclick="addRow('${sec}')">${meta.addTxt}</button>
+  </div>`;
+
+    if (sec === 'income') {
+        const b = document.getElementById('income-big');
+        if (b) b.textContent = fmt(total);
     }
 
+    applyActiveFilters(sec);
+    restoreFocus(container, focusedIdx, focusedField);
     updateOverview();
+}
+
+// ─── H4: تحديث صف واحد فقط بلا إعادة بناء القسم كامل ───
+function updateRowInPlace(sec, i) {
+    const container = document.getElementById('card-' + sec);
+    if (!container) return;
+    const row = container.querySelector(`.data-row[data-idx="${i}"]`);
+    if (!row) return;
+    const rowData = D[sec][i];
+    if (!rowData) return;
+
+    const isInc = sec === 'income';
+    const has = (rowData.actual || 0) > 0;
+
+    const diffChip = row.querySelector('.diff-chip');
+    if (diffChip) {
+        const diff = (rowData.actual || 0) - (rowData.planned || 0);
+        let dc = 'd-no', dt = '—';
+        if (has) {
+            if (isInc) { dc = diff >= 0 ? 'd-ok' : 'd-ov'; dt = (diff >= 0 ? '+' : '') + fmtN(diff); }
+            else { dc = diff <= 0 ? 'd-ok' : 'd-ov'; dt = fmtN(diff); }
+        }
+        diffChip.className = 'diff-chip ' + dc;
+        diffChip.textContent = dt;
+    }
+
+    const amtInputs = row.querySelectorAll('.amt-inp');
+    if (amtInputs[1]) {
+        amtInputs[1].classList.toggle('filled', has);
+        if (isStrictMode && sec !== 'income' && sec !== 'savings') {
+            const p = rowData.planned || 0;
+            const a = rowData.actual || 0;
+            if (p > 0 && a > p) amtInputs[1].setAttribute('data-overspent', '');
+            else amtInputs[1].removeAttribute('data-overspent');
+        }
+    }
+
+    if (sec === 'savings') {
+        const pct = rowData.planned > 0 ? Math.min((rowData.actual || 0) / rowData.planned * 100, 100) : 0;
+        const barColor = pct < 30 ? '#c9615a' : pct < 70 ? '#e0b060' : '#4a9e7f';
+        const remaining = (rowData.planned || 0) - (rowData.actual || 0);
+
+        const fill = row.querySelector('.sg-bar-fill');
+        if (fill) {
+            fill.style.width = pct + '%';
+            fill.style.background = barColor;
+        }
+        const metaSpans = row.querySelectorAll('.sg-meta span');
+        if (metaSpans[0]) {
+            metaSpans[0].style.color = barColor;
+            metaSpans[0].textContent = Math.round(pct) + '%';
+        }
+        if (metaSpans[1]) {
+            metaSpans[1].textContent = remaining > 0
+                ? 'متبقي: ' + fmtN(remaining) + ' ' + getCurr()
+                : '✅ اكتمل الهدف!';
+        }
+    }
+
+    const total = sumD(sec, 'actual') || sumD(sec, 'planned');
+    const chip = document.getElementById('chip-' + sec);
+    if (chip) chip.textContent = fmt(total);
+
+    if (sec === 'income') {
+        const b = document.getElementById('income-big');
+        if (b) b.textContent = fmt(total);
+    }
 }
 
 // ══════════════════════════════════════════
@@ -488,18 +654,66 @@ function delRow(sec, i) {
     D[sec].splice(i, 1); save(); renderRows(sec);
 }
 
+// ══════════════════════════════════════════
+//  M6: ملاحظة على undo + save
+//  ─────────────────────────────────────────
+//  • الحقول planned/actual → كيدخلو لـ undo stack (تعديلات مالية)
+//  • الحقول name/note/date/repeat → ما كيدخلوش (تعديلات نصية خفيفة، مو ضرورية)
+//  • save() كيتدعى في كل الحالات (حتى name) — البيانات محفوظة دغيا في localStorage
+//  ⚠️ لو بدّلنا onchange بـ oninput مستقبلاً، خاصنا debounce هنا:
+//     const _saveDebounce = {};
+//     clearTimeout(_saveDebounce[sec]);
+//     _saveDebounce[sec] = setTimeout(save, 400);
+// ══════════════════════════════════════════
 function upField(sec, i, f, v) {
     if (isReadonly) {
         showAlert('warning', '⛔ التطبيق في وضع القراءة فقط، قم بإلغاء الوضع للتعديل');
         return;
     }
     if (f === 'actual' && !checkStrictLimit(sec, i, v)) {
-        renderRows(sec);
+        const container = document.getElementById('card-' + sec);
+        const row = container?.querySelector(`.data-row[data-idx="${i}"]`);
+        const amtInputs = row?.querySelectorAll('.amt-inp');
+        if (amtInputs && amtInputs[1]) amtInputs[1].value = D[sec][i].actual || '';
         return;
     }
     if (f !== 'name' && f !== 'note' && f !== 'date' && f !== 'repeat') pushUndo();
-    D[sec][i][f] = v; save();
-    if (f !== 'name' && f !== 'note' && f !== 'date' && f !== 'repeat') renderRows(sec);
+    D[sec][i][f] = v;
+    save();
+
+    if (f === 'name' || f === 'date') {
+        return;
+    }
+
+    if (f === 'note') {
+        const container = document.getElementById('card-' + sec);
+        const row = container?.querySelector(`.data-row[data-idx="${i}"]`);
+        const toggle = row?.querySelector('.note-toggle');
+        if (toggle) {
+            if (v) {
+                toggle.classList.add('has-note');
+                toggle.textContent = '📝 ' + v.substring(0, 20) + (v.length > 20 ? '...' : '');
+            } else {
+                toggle.classList.remove('has-note');
+                toggle.textContent = '＋ ملاحظة';
+            }
+        }
+        return;
+    }
+
+    if (f === 'repeat') {
+        const container = document.getElementById('card-' + sec);
+        const row = container?.querySelector(`.data-row[data-idx="${i}"]`);
+        const toggle = row?.querySelector('.repeat-toggle');
+        if (toggle) {
+            toggle.classList.toggle('active', !!v);
+            toggle.textContent = '🔁 ' + (v ? 'متكرر' : 'تكرار');
+        }
+        return;
+    }
+
+    updateRowInPlace(sec, i);
+    updateOverview();
 }
 
 function toggleNote(sec, i) {
@@ -640,21 +854,22 @@ function changeYear(dir) {
     renderYearView();
 }
 
+// ── M3: getMonthStats أصبحت مبنية على getMonthSummary ──
 function getMonthStats(y, m) {
     const data = peekMonth(y, m);
     if (!data) return null;
-    const ia = sumM(data, 'income', 'actual'), ip = sumM(data, 'income', 'planned');
-    const ba = sumM(data, 'bills', 'actual'), bp = sumM(data, 'bills', 'planned');
-    const ea = sumM(data, 'expenses', 'actual'), ep = sumM(data, 'expenses', 'planned');
-    const sa = sumM(data, 'savings', 'actual'), sp = sumM(data, 'savings', 'planned');
-    const da = sumM(data, 'debts', 'actual'), dp = sumM(data, 'debts', 'planned');
-    const totalA = ba + ea + sa + da, totalP = bp + ep + sp + dp;
-    const income = ia || ip;
-    const spent = totalA || totalP;
-    const savings = sa || sp;
-    const rem = income - spent;
-    const hasIncome = income > 0;
-    return { income, spent, savings, rem, hasIncome, ia, ip, totalA, totalP };
+    const s = getMonthSummary(data);
+    if (!s) return null;
+    return {
+        income: s.income,
+        spent: s.total,
+        savings: s.savings,
+        rem: s.rem,
+        hasIncome: s.hasIncome,
+        ia: s.ia, ip: s.ip,
+        totalA: s.total,
+        totalP: s.totalPlanned
+    };
 }
 
 function renderYearView() {
@@ -674,7 +889,6 @@ function renderYearView() {
     <div class="ys-card c-b"><div class="ys-label">باقي السنة</div><div class="ys-val">${fmtShort(ytRem)}</div></div>
   `;
 
-    // ✅ نستخدم تاريخاً جديداً لتفادي مشكلة بقاء الصفحة مفتوحة عبر منتصف الليل
     const nowFresh = new Date();
     const nowY = nowFresh.getFullYear(), nowM = nowFresh.getMonth() + 1;
     let html = '';
@@ -1077,11 +1291,10 @@ function checkDailyReminder() {
     const todayStr = today.toDateString();
     if (lastReminderDay === todayStr) return;
 
-    // ✅ نتحقق إذا كان هناك مصروف مسجّل اليوم (وليس طول الشهر)
     const todayData = peekMonth(today.getFullYear(), today.getMonth() + 1);
-    const todayISO = today.toISOString().slice(0, 10); // YYYY-MM-DD
+    const todayISO = today.toISOString().slice(0, 10);
     const hasTodayEntry = todayData && SECS.some(sec =>
-        todayData[sec].some(r => (r.actual || 0) > 0 && (r.date === todayISO || !r.date))
+        todayData[sec].some(r => (r.actual || 0) > 0 && r.date === todayISO)
     );
 
     if (hasTodayEntry) {
@@ -1117,6 +1330,27 @@ function sendReminder() {
         });
     } catch (e) { }
 }
+
+// ─── reminder timer (visibility-aware) ───
+let reminderTimer = null;
+
+function startReminderTimer() {
+    if (reminderTimer) return;
+    reminderTimer = setInterval(checkDailyReminder, 5 * 60 * 1000);
+}
+
+function stopReminderTimer() {
+    if (reminderTimer) { clearInterval(reminderTimer); reminderTimer = null; }
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        checkDailyReminder();
+        startReminderTimer();
+    } else {
+        stopReminderTimer();
+    }
+});
 
 // ══════════════════════════════════════════
 //  SPENDING RATE & FORECAST
@@ -1207,15 +1441,19 @@ function renderCompare() {
     const cols = [sel1, sel2, ...(sel3 ? [sel3] : [])];
     const getLabel = k => { const [y, m] = k.split('-'); return AR_MONTHS[+m - 1] + '\n' + y; };
 
+    // ── M3: نستخدم getMonthSummary بدل تكرار sumM ──
     const getData = k => {
         const data = peekMonth(...k.split('-').map(Number));
         if (!data) return { income: 0, bills: 0, expenses: 0, savings: 0, debts: 0, total: 0 };
-        const ia = sumM(data, 'income', 'actual'), ip = sumM(data, 'income', 'planned');
-        const ba = sumM(data, 'bills', 'actual') || sumM(data, 'bills', 'planned');
-        const ea = sumM(data, 'expenses', 'actual') || sumM(data, 'expenses', 'planned');
-        const sa = sumM(data, 'savings', 'actual') || sumM(data, 'savings', 'planned');
-        const da = sumM(data, 'debts', 'actual') || sumM(data, 'debts', 'planned');
-        return { income: ia || ip, bills: ba, expenses: ea, savings: sa, debts: da, total: ba + ea + sa + da };
+        const s = getMonthSummary(data);
+        return {
+            income: s.income,
+            bills: s.bills,
+            expenses: s.expenses,
+            savings: s.savings,
+            debts: s.debts,
+            total: s.total
+        };
     };
 
     const stats = cols.map(getData);
@@ -1661,15 +1899,12 @@ function exportYearPDF() {
             allMonthsStats.push({ m, hasData: false });
             continue;
         }
-        const ia = sumM(data, 'income', 'actual') || sumM(data, 'income', 'planned');
-        const ba = sumM(data, 'bills', 'actual') || sumM(data, 'bills', 'planned');
-        const ea = sumM(data, 'expenses', 'actual') || sumM(data, 'expenses', 'planned');
-        const sa = sumM(data, 'savings', 'actual') || sumM(data, 'savings', 'planned');
-        const da = sumM(data, 'debts', 'actual') || sumM(data, 'debts', 'planned');
-        const spent = ba + ea + sa + da;
-        const rem = ia - spent;
-        totalIncome += ia; totalSpent += spent; totalSavings += sa;
-        allMonthsStats.push({ m, hasData: true, ia, spent, sa, rem });
+        // ── M3: نستخدم getMonthSummary بدل تكرار الحسابات ──
+        const s = getMonthSummary(data);
+        totalIncome += s.income;
+        totalSpent += s.total;
+        totalSavings += s.savings;
+        allMonthsStats.push({ m, hasData: true, ia: s.income, spent: s.total, sa: s.savings, rem: s.rem });
     }
 
     for (let row = 0; row < 3; row++) {
@@ -2006,7 +2241,7 @@ function shareMonthURL() {
         const k = monthKey(curYear, curMonth);
         const monthData = ALL[k] || D;
         const payload = JSON.stringify({ v: 1, k, d: monthData });
-        const encoded = btoa(unescape(encodeURIComponent(payload)));
+        const encoded = utf8ToBase64(payload);
         const url = location.origin + location.pathname + '?myz=' + encoded;
 
         if (url.length > 8000) {
@@ -2038,7 +2273,7 @@ function loadSharedMonth() {
     const myz = params.get('myz');
     if (!myz) return;
     try {
-        const payload = JSON.parse(decodeURIComponent(escape(atob(myz))));
+        const payload = JSON.parse(base64ToUtf8(myz));
         if (!payload?.k || !payload?.d) return;
 
         if (!/^\d{4}-\d{2}$/.test(payload.k)) {
@@ -2148,8 +2383,8 @@ function renderMultiYearChart() {
         for (let m = 1; m <= 12; m++) {
             const data = peekMonth(y, m);
             if (data) {
-                const spent = ['bills', 'expenses', 'savings', 'debts'].reduce((t, s) => t + (sumM(data, s, 'actual') || sumM(data, s, 'planned')), 0);
-                spentData.push(spent || null);
+                const s = getMonthSummary(data);
+                spentData.push(s.total || null);
             } else spentData.push(null);
         }
         const c = colors[ci % colors.length];
@@ -2201,9 +2436,8 @@ function renderSavingsRateChart() {
     for (let m = 1; m <= 12; m++) {
         const data = peekMonth(viewYear, m);
         if (data) {
-            const inc = sumM(data, 'income', 'actual') || sumM(data, 'income', 'planned');
-            const sav = sumM(data, 'savings', 'actual') || sumM(data, 'savings', 'planned');
-            const rate = inc > 0 ? Math.round(sav / inc * 100) : null;
+            const s = getMonthSummary(data);
+            const rate = s.income > 0 ? Math.round(s.savings / s.income * 100) : null;
             rateData.push(rate);
             if (rate !== null) hasAny = true;
         } else rateData.push(null);
@@ -2256,7 +2490,7 @@ function renderSavingsRateChart() {
 }
 
 // ══════════════════════════════════════════
-//  MONTHLY COMPARISON BANNER
+//  MONTHLY COMPARISON BANNER (M3)
 // ══════════════════════════════════════════
 function checkMonthlyComparison() {
     const banner = document.getElementById('monthCmpBanner');
@@ -2268,22 +2502,20 @@ function checkMonthlyComparison() {
     const prevData = peekMonth(prevY, prevM);
     if (!prevData) return;
 
-    const curInc = sumD('income', 'actual') || sumD('income', 'planned');
-    const curSpent = ['bills', 'expenses'].reduce((t, s) => t + sumD(s, 'actual'), 0);
-    const curSav = sumD('savings', 'actual');
+    const curS = getMonthSummary(D);
+    const prevS = getMonthSummary(prevData);
 
-    const prevInc = sumM(prevData, 'income', 'actual') || sumM(prevData, 'income', 'planned');
-    const prevSpent = ['bills', 'expenses'].reduce((t, s) => t + sumM(prevData, s, 'actual'), 0);
-    const prevSav = sumM(prevData, 'savings', 'actual');
+    const curSpent = curS.bills + curS.expenses;
+    const prevSpent = prevS.bills + prevS.expenses;
 
-    if (!prevInc && !prevSpent) { banner.style.display = 'none'; return; }
+    if (!prevS.income && !prevSpent) { banner.style.display = 'none'; return; }
 
     const icon = document.getElementById('mcbIcon');
     const text = document.getElementById('mcbText');
     let type = 'neutral', iconVal = '📊', msg = '';
 
     const spentDiff = prevSpent > 0 ? Math.round((curSpent - prevSpent) / prevSpent * 100) : 0;
-    const savDiff = prevSav > 0 ? Math.round((curSav - prevSav) / prevSav * 100) : 0;
+    const savDiff = prevS.savings > 0 ? Math.round((curS.savings - prevS.savings) / prevS.savings * 100) : 0;
     const prevLabel = AR_MONTHS[prevM - 1] + ' ' + prevY;
 
     if (curSpent > 0 && prevSpent > 0) {
@@ -2293,7 +2525,7 @@ function checkMonthlyComparison() {
         } else if (spentDiff >= 15) {
             type = 'worse'; iconVal = '⚠️';
             msg = `مصاريفك ارتفعت ${spentDiff}% مقارنة بـ ${prevLabel} — راجع نفقاتك`;
-        } else if (prevSav > 0 && savDiff >= 20) {
+        } else if (prevS.savings > 0 && savDiff >= 20) {
             type = 'better'; iconVal = '💎';
             msg = `ادخارك ارتفع ${savDiff}% مقارنة بـ ${prevLabel} — ممتاز!`;
         } else {
@@ -2580,8 +2812,10 @@ checkMonthlyComparison();
 setTimeout(updateCharts, 80);
 setTimeout(updateOverviewBarChart, 100);
 initTouchDrag();
-setTimeout(checkDailyReminder, 2000);
-setInterval(checkDailyReminder, 60000);
+setTimeout(() => {
+    checkDailyReminder();
+    if (document.visibilityState === 'visible') startReminderTimer();
+}, 2000);
 loadSharedMonth();
 
 // ══════════════════════════════════════════
@@ -2654,3 +2888,25 @@ window.addEventListener('appinstalled', () => {
     console.log('✅ تم تثبيت التطبيق');
     showAlert('success', '🎉 تم تثبيت ميزانيتي على جهازك!');
 });
+
+// ══════════════════════════════════════════
+//  SW Update Notification
+// ══════════════════════════════════════════
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data?.type === 'SW_UPDATED') {
+            const bar = document.getElementById('alertBar');
+            const msgEl = document.getElementById('alertBarMsg');
+            if (bar && msgEl) {
+                bar.className = 'alert-bar success';
+                bar.style.display = 'flex';
+                bar.innerHTML = `
+                    <span>🔄 تنزّلت نسخة جديدة — أعد التحميل باش تشوفها</span>
+                    <button class="alert-bar-dismiss" onclick="location.reload()" title="إعادة التحميل">🔄</button>
+                    <button class="alert-bar-dismiss" onclick="this.parentElement.style.display='none'" title="إغلاق">✕</button>
+                `;
+                clearTimeout(window._swUpdateTimer);
+            }
+        }
+    });
+}
